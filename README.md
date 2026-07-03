@@ -155,8 +155,8 @@ PToken Core 提供零框架依赖的独立使用方式，同时也为以下框�
 
 | 包名 | 说明 |
 | --- | --- |
-| [wenber-yu/ptoken-laravel](../ptoken-laravel) | Laravel 集成包，支持中间件认证、User Model 自动关联 |
-| [wenber-yu/ptoken-hyperf](../ptoken-hyperf) | Hyperf 集成包，支持中间件认证、`#[PTokenAuth(exclude: true)]` 排除标记、User Model 自动关联 |
+| [wenber-yu/ptoken-laravel](https://github.com/wenber-yu/ptoken-laravel) | Laravel 集成包，支持中间件认证、User Model 自动关联 |
+| [wenber-yu/ptoken-hyperf](https://github.com/wenber-yu/ptoken-hyperf) | Hyperf 集成包，支持中间件认证、`#[PTokenAuth(exclude: true)]` 排除标记、User Model 自动关联 |
 
 框架集成包提供了：
 - 自动配置注入（`ConfigProvider` / `ServiceProvider`）
