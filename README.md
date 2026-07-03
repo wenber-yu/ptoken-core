@@ -177,4 +177,4 @@ PToken Core 提供零框架依赖的独立使用方式，同时也为以下框�
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)
