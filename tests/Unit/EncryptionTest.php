@@ -26,11 +26,9 @@ test('加密用户 Key 可逆（encrypt → decrypt 还原）', function () {
 test('不同加密密钥产生不同密文', function () {
     $ptoken1 = new PToken([
         'encrypt_key' => '11111111111111111111111111111111',
-        'max_refresh' => 0,
     ]);
     $ptoken2 = new PToken([
         'encrypt_key' => '22222222222222222222222222222222',
-        'max_refresh' => 0,
     ]);
 
     $encryptMethod = getPrivateMethod(PToken::class, 'encryptUserKey');
@@ -57,14 +55,14 @@ test('buildToken 与 parseToken 往返', function () {
     $buildMethod = getPrivateMethod(PToken::class, 'buildToken');
     $parseMethod = getPrivateMethod(PToken::class, 'parseToken');
 
-    // 使用不含分隔符 '.' 的值以保证往返正确
+    // Token 格式: v1.{encryptedUserKey}.{tokenId}
     $token = $buildMethod->invoke($ptoken, 'ABC123encrypted', 'XYZ789tokenId');
 
     expect($token)->toContain('.');
-    expect($token)->toBe('ABC123encrypted.XYZ789tokenId');
+    expect($token)->toBe('v1.ABC123encrypted.XYZ789tokenId');
 
     $parsed = $parseMethod->invoke($ptoken, $token);
-    expect($parsed)->toBe(['ABC123encrypted', 'XYZ789tokenId']);
+    expect($parsed)->toBe(['v1', 'ABC123encrypted', 'XYZ789tokenId']);
 });
 
 test('parseToken 对无效格式返回 null', function () {

@@ -23,13 +23,7 @@ class PTokenConfig
     public int $timeout = 604800;
 
     /**
-     * 最大续期窗口（秒）。当剩余 TTL <= (timeout - max_refresh) 时，
-     * 认证过程中自动续期 Token。
-     */
-    public int $max_refresh = 86400;
-
-    /**
-     * Token 字符串分隔符，格式：{encryptedUserKey}.{tokenId}。
+     * Token 字符串分隔符，格式：v1.{encryptedUserKey}.{tokenId}。
      * 使用 '.' 因为它不会出现在 Base64URL 编码中。
      */
     public string $token_delimiter = '.';
@@ -48,6 +42,57 @@ class PTokenConfig
     public bool $multi_login = false;
 
     /**
+     * Token 格式版本号，嵌入 token 字符串中。
+     * 如 'v1'，未来格式变更时递增。
+     */
+    public string $token_version = 'v1';
+
+    /**
+     * 最大自动续期时间（秒）。
+     *
+     * 当 Token 剩余有效期不足此值时，get() 会自动续期并轮换 token。
+     * 设为 0 可禁用自动续期。
+     */
+    public int $max_refresh = 0;
+
+    /**
+     * Token 类型标识，写入缓存的 token_type 字段。
+     *
+     * 示例：'access_token'、'api_key'、'personal_access_token'
+     */
+    public string $token_type = 'access_token';
+
+    /**
+     * Token 签发者（iss），用于标识 token 由谁签发。
+     *
+     * 示例：'https://api.example.com'
+     * 留空则不校验。
+     */
+    public string $issuer = '';
+
+    /**
+     * Token 受众（aud），用于标识 token 的预期接收方。
+     *
+     * 示例：'https://api.example.com'
+     * 留空则不校验。
+     */
+    public string $audience = '';
+
+    /**
+     * 自定义请求头名称，用于从请求中提取 token。
+     *
+     * 默认 'Authorization'，可改为 'X-Api-Token' 等。
+     */
+    public string $token_header = 'Authorization';
+
+    /**
+     * 响应头名称，自动续期后用于告知前端新 token。
+     *
+     * 默认 'X-New-Token'。
+     */
+    public string $new_token_header = 'X-New-Token';
+
+    /**
      * User Model 类名（FQCN）。设置后中间件将通过懒加载自动将
      * 已认证用户与对应 Model 实例关联（Laravel 走 Eloquent，Hyperf 走 Container）。
      *
@@ -56,6 +101,14 @@ class PTokenConfig
      * null = 不自动关联 User Model。
      */
     public ?string $user_model = null;
+
+    /**
+     * 设备指纹记录开关。
+     *
+     * true = 记录客户端 IP、User-Agent 等信息到 token 缓存中。
+     * false = 不记录设备信息。
+     */
+    public bool $record_device = false;
 
     /**
      * 认证中间件排除路径。

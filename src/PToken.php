@@ -41,53 +41,81 @@ class PToken
     }
 
     /**
-     * Generate a new token for the given user key.
+     * Generate a new access token for the given user key.
      *
      * Each token has a unique ID (jti), so multiple tokens for the same user
      * are independent of each other.
      *
      * @param string        $userKey   Unique identifier for the user (e.g., user ID).
-     * @param mixed         $data      Custom data to associate with the token.
      * @param array<string> $abilities Token abilities (scopes). Use ['*'] for all abilities.
-     * @return string The generated token string.
+     * @param mixed         $data      Custom data to associate with the token.
+     * @param array{ip?: string, user_agent?: string, device_name?: string}|null $device Device info, only used when config record_device is true.
+     * @return array{token: string}
      * @throws RuntimeException on encryption or cache failure.
      */
-    public function generate(string $userKey, mixed $data, array $abilities = ['*']): string
+    public function generate(string $userKey, array $abilities = ['*'], mixed $data = [], ?array $device = null): array
     {
         $encryptedUserKey = $this->encryptUserKey($userKey);
-        $tokenId = $this->generateTokenId();
+        $token_id = $this->generateTokenId();
 
         if (!$this->config->multi_login) {
             $this->destroyAllByUserKey($userKey);
         }
 
         $now = time();
-        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $token_id);
 
         $cacheData = [
-            'tokenId'   => $tokenId,
-            'userKey'   => $userKey,
-            'data'      => $data,
-            'abilities' => $abilities,
-            'createAt'  => $now,
-            'expireAt'  => $now + $this->config->timeout,
+            'token_id'   => $token_id,
+            'user_key'   => $userKey,
+            'data'       => $data,
+            'abilities'  => $abilities,
+            'token_type' => $this->config->token_type,
+            'iat'        => $now,
+            'nbf'        => $now,
+            'create_at'  => $now,
+            'expire_at'  => $now + $this->config->timeout,
         ];
+
+        if ($this->config->issuer !== '') {
+            $cacheData['iss'] = $this->config->issuer;
+        }
+
+        if ($this->config->audience !== '') {
+            $cacheData['aud'] = $this->config->audience;
+        }
+
+        // Record device info
+        if ($this->config->record_device && $device !== null) {
+            $cacheData['device'] = [
+                'ip'          => $device['ip'] ?? '',
+                'user_agent'  => $device['user_agent'] ?? '',
+                'device_name' => $device['device_name'] ?? '',
+            ];
+        }
 
         if (!$this->cacheDriver->set($cacheKey, $cacheData, $this->config->timeout)) {
             throw new RuntimeException('Failed to store token data in cache');
         }
 
         // Register tokenId in the user's token index
-        $this->addToUserTokenIndex($encryptedUserKey, $tokenId);
+        $this->addToUserTokenIndex($encryptedUserKey, $token_id);
 
-        return $this->buildToken($encryptedUserKey, $tokenId);
+        $token = $this->buildToken($encryptedUserKey, $token_id);
+
+        return [
+            'token' => $token,
+        ];
     }
 
     /**
-     * Get token data. Automatically refreshes if within the refresh window.
+     * Get token data.
+     *
+     * When auto-refresh triggers (max_refresh > 0 and remaining lifetime < max_refresh),
+     * the token is rotated: a new token string is generated and returned via 'new_token'.
      *
      * @param string $token Token string.
-     * @return array{tokenId: string, userKey: string, data: mixed, abilities: array<string>, createAt: int, expireAt: int}|null
+     * @return array{token_id: string, user_key: string, data: mixed, abilities: array<string>, token_type: string, iat: int, nbf: int, create_at: int, expire_at: int, new_token?: string}|null
      */
     public function get(string $token): ?array
     {
@@ -96,26 +124,46 @@ class PToken
             return null;
         }
 
-        [$encryptedUserKey, $tokenId] = $parsed;
+        [$version, $encryptedUserKey, $token_id] = $parsed;
 
-        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $token_id);
         $cacheData = $this->cacheDriver->get($cacheKey);
 
-        if (!is_array($cacheData) || !isset($cacheData['userKey'], $cacheData['expireAt'])) {
+        if (!is_array($cacheData) || !isset($cacheData['user_key'], $cacheData['expire_at'])) {
             return null;
         }
 
-        if (time() > $cacheData['expireAt']) {
+        if (time() > $cacheData['expire_at']) {
             $this->cacheDriver->delete($cacheKey);
-            $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
+            $this->removeFromUserTokenIndex($encryptedUserKey, $token_id);
             return null;
         }
 
-        $now = time();
-        $remainingTtl = $cacheData['expireAt'] - $now;
+        // Auto-refresh: rotate token if remaining lifetime < max_refresh
+        if ($this->config->max_refresh > 0) {
+            $remaining = $cacheData['expire_at'] - time();
+            if ($remaining < $this->config->max_refresh) {
+                $old_token_id = $cacheData['token_id'];
 
-        if ($remainingTtl <= ($this->config->timeout - $this->config->max_refresh)) {
-            $this->refresh($token);
+                // Delete old token from cache
+                $this->cacheDriver->delete($cacheKey);
+                $this->removeFromUserTokenIndex($encryptedUserKey, $token_id);
+
+                // Generate new tokenId, keep all other data
+                $new_token_id = $this->generateTokenId();
+                $newCacheKey = $this->buildCacheKey($encryptedUserKey, $new_token_id);
+                $now = time();
+
+                $cacheData['token_id']  = $new_token_id;
+                $cacheData['iat']      = $now;
+                $cacheData['nbf']      = $now;
+                $cacheData['expire_at'] = $now + $this->config->timeout;
+
+                $this->cacheDriver->set($newCacheKey, $cacheData, $this->config->timeout);
+                $this->addToUserTokenIndex($encryptedUserKey, $new_token_id);
+
+                $cacheData['new_token'] = $this->buildToken($encryptedUserKey, $new_token_id);
+            }
         }
 
         return $cacheData;
@@ -215,11 +263,11 @@ class PToken
             return false;
         }
 
-        [$encryptedUserKey, $tokenId] = $parsed;
+        [$version, $encryptedUserKey, $token_id] = $parsed;
 
-        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
-        $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $token_id);
 
+        $this->removeFromUserTokenIndex($encryptedUserKey, $token_id);
         return $this->cacheDriver->delete($cacheKey);
     }
 
@@ -258,42 +306,47 @@ class PToken
     }
 
     /**
-     * Manually refresh a token's expiration time.
+     * Get all active tokens with full detail for a user.
      *
-     * @param string $token The token string.
-     * @return string|null Returns the token string on success, null on failure.
+     * Useful for admin panels to view multi-device login records.
+     * Automatically filters out expired tokens.
+     *
+     * @param string $userKey The user identifier.
+     * @return array<int, array{token_id: string, user_key: string, data: mixed, abilities: array<string>, create_at: int, expire_at: int}>
      */
-    public function refresh(string $token): ?string
+    public function getTokensDetail(string $userKey): array
     {
-        $parsed = $this->parseToken($token);
-        if ($parsed === null) {
-            return null;
-        }
+        $encryptedUserKey = $this->encryptUserKey($userKey);
+        $tokenIds = $this->getUserTokenIds($encryptedUserKey);
 
-        [$encryptedUserKey, $tokenId] = $parsed;
-        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
-        $cacheData = $this->cacheDriver->get($cacheKey);
-
-        if (!is_array($cacheData) || !isset($cacheData['userKey'], $cacheData['data'])) {
-            return null;
-        }
-
+        $result = [];
         $now = time();
-        $cacheData['expireAt'] = $now + $this->config->timeout;
-        $cacheData['createAt'] = $now;
+        $expiredTokenIds = [];
 
-        $remainingTtl = $cacheData['expireAt'] - $now;
-        if ($remainingTtl <= 0) {
-            $this->cacheDriver->delete($cacheKey);
+        foreach ($tokenIds as $tokenId) {
+            $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
+            $cacheData = $this->cacheDriver->get($cacheKey);
+
+            if (!is_array($cacheData) || !isset($cacheData['user_key'], $cacheData['expire_at'])) {
+                $expiredTokenIds[] = $tokenId;
+                continue;
+            }
+
+            if ($now > $cacheData['expire_at']) {
+                $this->cacheDriver->delete($cacheKey);
+                $expiredTokenIds[] = $tokenId;
+                continue;
+            }
+
+            $result[] = $cacheData;
+        }
+
+        // Clean up expired entries from index
+        foreach ($expiredTokenIds as $tokenId) {
             $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
-            return null;
         }
 
-        if (!$this->cacheDriver->set($cacheKey, $cacheData, $remainingTtl)) {
-            throw new RuntimeException('Failed to refresh token in cache');
-        }
-
-        return $token;
+        return $result;
     }
 
     /**
@@ -318,28 +371,27 @@ class PToken
 
     private function buildToken(string $encryptedUserKey, string $tokenId): string
     {
-        return $encryptedUserKey
+        return $this->config->token_version
+            . $this->config->token_delimiter
+            . $encryptedUserKey
             . $this->config->token_delimiter
             . $tokenId;
     }
 
     /**
-     * Parse token into [encryptedUserKey, tokenId] or null.
+     * Parse token into [version, encryptedUserKey, tokenId] or null.
      *
-     * @return array{string, string}|null
+     * Token format: v1.{encryptedUserKey}.{tokenId}
+     *
+     * @return array{string, string, string}|null
      */
     private function parseToken(string $token): ?array
     {
         $delimiter = $this->config->token_delimiter;
-        $parts = explode($delimiter, $token, 3);
+        $parts = explode($delimiter, $token, 4);
 
-        // Support legacy tokens: {encryptedUserKey}_{randomStr}
-        if (count($parts) === 2 && !empty($parts[0]) && !empty($parts[1])) {
-            return [$parts[0], $parts[1]];
-        }
-
-        if (count($parts) === 3 && !empty($parts[0]) && !empty($parts[1])) {
-            return [$parts[0], $parts[1]];
+        if (count($parts) === 3 && !empty($parts[0]) && !empty($parts[1]) && !empty($parts[2])) {
+            return [$parts[0], $parts[1], $parts[2]];
         }
 
         return null;
@@ -461,11 +513,7 @@ class PToken
         }
 
         if ($this->config->max_refresh < 0) {
-            throw new RuntimeException('max_refresh must be non-negative');
-        }
-
-        if ($this->config->max_refresh > $this->config->timeout) {
-            throw new RuntimeException('max_refresh must not exceed timeout');
+            throw new RuntimeException('max_refresh must be >= 0');
         }
     }
 

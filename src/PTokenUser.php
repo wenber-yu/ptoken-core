@@ -14,9 +14,9 @@ use JsonSerializable;
  */
 class PTokenUser implements ArrayAccess, JsonSerializable
 {
-    protected readonly string $tokenId;
+    protected readonly string $token_id;
 
-    protected readonly string $userKey;
+    protected readonly string $user_key;
 
     protected readonly mixed $data;
 
@@ -25,42 +25,50 @@ class PTokenUser implements ArrayAccess, JsonSerializable
      */
     protected readonly array $abilities;
 
-    protected readonly int $createAt;
+    protected readonly int $create_at;
 
-    protected readonly int $expireAt;
+    protected readonly int $expire_at;
 
     /**
-     * @param string        $tokenId   Token 唯一标识
-     * @param string        $userKey   用户标识
-     * @param mixed         $data      用户关联数据
-     * @param array<string> $abilities Token 能力/作用域
-     * @param int           $createAt  Token 创建时间（Unix 时间戳）
-     * @param int           $expireAt  Token 过期时间（Unix 时间戳）
+     * @var array{ip: string, user_agent: string, device_name: string}|null
+     */
+    protected readonly ?array $device;
+
+    /**
+     * @param string        $token_id   Token 唯一标识
+     * @param string        $user_key   用户标识
+     * @param mixed         $data       用户关联数据
+     * @param array<string> $abilities  Token 能力/作用域
+     * @param int           $create_at  Token 创建时间（Unix 时间戳）
+     * @param int           $expire_at  Token 过期时间（Unix 时间戳）
+     * @param array{ip: string, user_agent: string, device_name: string}|null $device 设备信息
      */
     public function __construct(
-        string $tokenId,
-        string $userKey,
+        string $token_id,
+        string $user_key,
         mixed $data,
         array $abilities,
-        int $createAt,
-        int $expireAt,
+        int $create_at,
+        int $expire_at,
+        ?array $device = null,
     ) {
-        $this->tokenId   = $tokenId;
-        $this->userKey   = $userKey;
+        $this->token_id  = $token_id;
+        $this->user_key  = $user_key;
         $this->data      = $data;
         $this->abilities = $abilities;
-        $this->createAt  = $createAt;
-        $this->expireAt  = $expireAt;
+        $this->create_at = $create_at;
+        $this->expire_at = $expire_at;
+        $this->device    = $device;
     }
 
     public function getTokenId(): string
     {
-        return $this->tokenId;
+        return $this->token_id;
     }
 
     public function getUserKey(): string
     {
-        return $this->userKey;
+        return $this->user_key;
     }
 
     public function getData(): mixed
@@ -78,12 +86,20 @@ class PTokenUser implements ArrayAccess, JsonSerializable
 
     public function getCreateAt(): int
     {
-        return $this->createAt;
+        return $this->create_at;
     }
 
     public function getExpireAt(): int
     {
-        return $this->expireAt;
+        return $this->expire_at;
+    }
+
+    /**
+     * @return array{ip: string, user_agent: string, device_name: string}|null
+     */
+    public function getDevice(): ?array
+    {
+        return $this->device;
     }
 
     /**
@@ -111,7 +127,7 @@ class PTokenUser implements ArrayAccess, JsonSerializable
      */
     public function isExpired(): bool
     {
-        return time() > $this->expireAt;
+        return time() > $this->expire_at;
     }
 
     /**
@@ -119,7 +135,7 @@ class PTokenUser implements ArrayAccess, JsonSerializable
      */
     public function getRemainingTtl(): int
     {
-        $remaining = $this->expireAt - time();
+        $remaining = $this->expire_at - time();
         return max(0, $remaining);
     }
 
@@ -127,18 +143,19 @@ class PTokenUser implements ArrayAccess, JsonSerializable
 
     public function offsetExists(mixed $offset): bool
     {
-        return in_array($offset, ['tokenId', 'userKey', 'data', 'abilities', 'createAt', 'expireAt'], true);
+        return in_array($offset, ['token_id', 'user_key', 'data', 'abilities', 'create_at', 'expire_at', 'device'], true);
     }
 
     public function offsetGet(mixed $offset): mixed
     {
         return match ($offset) {
-            'tokenId'   => $this->tokenId,
-            'userKey'   => $this->userKey,
+            'token_id'  => $this->token_id,
+            'user_key'  => $this->user_key,
             'data'      => $this->data,
             'abilities' => $this->abilities,
-            'createAt'  => $this->createAt,
-            'expireAt'  => $this->expireAt,
+            'create_at' => $this->create_at,
+            'expire_at' => $this->expire_at,
+            'device'    => $this->device,
             default     => null,
         };
     }
@@ -158,12 +175,13 @@ class PTokenUser implements ArrayAccess, JsonSerializable
     public function jsonSerialize(): array
     {
         return [
-            'tokenId'   => $this->tokenId,
-            'userKey'   => $this->userKey,
+            'token_id'  => $this->token_id,
+            'user_key'  => $this->user_key,
             'data'      => $this->data,
             'abilities' => $this->abilities,
-            'createAt'  => $this->createAt,
-            'expireAt'  => $this->expireAt,
+            'create_at' => $this->create_at,
+            'expire_at' => $this->expire_at,
+            'device'    => $this->device,
         ];
     }
 }
