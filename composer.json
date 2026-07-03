@@ -3,7 +3,7 @@
     "description": "Pure PHP token management library. Supports multiple cache drivers (File/Redis), auto-refresh, multi-login control, token abilities.",
     "type": "library",
     "license": "MIT",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "keywords": [
         "token",
         "auth",
