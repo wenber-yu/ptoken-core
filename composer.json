@@ -1,0 +1,46 @@
+{
+    "name": "wenber-yu/ptoken-core",
+    "description": "Pure PHP token management library. Supports multiple cache drivers (File/Redis), auto-refresh, multi-login control.",
+    "type": "library",
+    "license": "MIT",
+    "version": "0.1.1",
+    "keywords": [
+        "token",
+        "auth",
+        "ptoken",
+        "core"
+    ],
+    "authors": [
+        {
+            "name": "wenbo"
+        }
+    ],
+    "require": {
+        "php": ">=8.3"
+    },
+    "require-dev": {
+        "pestphp/pest": "^2.0|^3.0",
+        "phpunit/phpunit": "^10.0|^11.0"
+    },
+    "suggest": {
+        "ext-redis": "Required for Redis cache driver"
+    },
+    "autoload": {
+        "psr-4": {
+            "Wenbo\\PToken\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Wenbo\\PToken\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "vendor/bin/pest"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    }
+}
