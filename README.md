@@ -1,6 +1,6 @@
 # PToken Core
 
-纯 PHP Token 管理核心库，零框架依赖。提供Token生成、验证、销毁、刷新及多端登录控制等基础能力，内置两种缓存驱动，可作为独立库使用，也可作为 `wenber-yu/ptoken-laravel` 和 `wenber-yu/ptoken-hyperf` 的底层依赖。
+纯 PHP Token 管理核心库，零框架依赖。提供Token生成、验证、销毁、刷新及多端登录控制等基础能力，内置两种缓存驱动，可作为独立库使用，也可作为 [wenber-yu/ptoken-laravel](https://github.com/wenber-yu/ptoken-laravel) 和 [wenber-yu/ptoken-hyperf](https://github.com/wenber-yu/ptoken-hyperf) 的底层依赖。
 
 ## 环境要求
 
