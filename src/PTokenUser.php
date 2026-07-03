@@ -14,26 +14,48 @@ use JsonSerializable;
  */
 class PTokenUser implements ArrayAccess, JsonSerializable
 {
+    protected readonly string $tokenId;
+
     protected readonly string $userKey;
 
     protected readonly mixed $data;
+
+    /**
+     * @var array<string>
+     */
+    protected readonly array $abilities;
 
     protected readonly int $createAt;
 
     protected readonly int $expireAt;
 
     /**
-     * @param string $userKey  用户标识
-     * @param mixed  $data     用户关联数据
-     * @param int    $createAt Token 创建时间（Unix 时间戳）
-     * @param int    $expireAt Token 过期时间（Unix 时间戳）
+     * @param string        $tokenId   Token 唯一标识
+     * @param string        $userKey   用户标识
+     * @param mixed         $data      用户关联数据
+     * @param array<string> $abilities Token 能力/作用域
+     * @param int           $createAt  Token 创建时间（Unix 时间戳）
+     * @param int           $expireAt  Token 过期时间（Unix 时间戳）
      */
-    public function __construct(string $userKey, mixed $data, int $createAt, int $expireAt)
+    public function __construct(
+        string $tokenId,
+        string $userKey,
+        mixed $data,
+        array $abilities,
+        int $createAt,
+        int $expireAt,
+    ) {
+        $this->tokenId   = $tokenId;
+        $this->userKey   = $userKey;
+        $this->data      = $data;
+        $this->abilities = $abilities;
+        $this->createAt  = $createAt;
+        $this->expireAt  = $expireAt;
+    }
+
+    public function getTokenId(): string
     {
-        $this->userKey  = $userKey;
-        $this->data     = $data;
-        $this->createAt = $createAt;
-        $this->expireAt = $expireAt;
+        return $this->tokenId;
     }
 
     public function getUserKey(): string
@@ -46,6 +68,14 @@ class PTokenUser implements ArrayAccess, JsonSerializable
         return $this->data;
     }
 
+    /**
+     * @return array<string>
+     */
+    public function getAbilities(): array
+    {
+        return $this->abilities;
+    }
+
     public function getCreateAt(): int
     {
         return $this->createAt;
@@ -54,6 +84,26 @@ class PTokenUser implements ArrayAccess, JsonSerializable
     public function getExpireAt(): int
     {
         return $this->expireAt;
+    }
+
+    /**
+     * Check if the token has a specific ability.
+     */
+    public function tokenCan(string $ability): bool
+    {
+        if (in_array('*', $this->abilities, true)) {
+            return true;
+        }
+
+        return in_array($ability, $this->abilities, true);
+    }
+
+    /**
+     * Check if the token does NOT have a specific ability.
+     */
+    public function tokenCant(string $ability): bool
+    {
+        return !$this->tokenCan($ability);
     }
 
     /**
@@ -77,17 +127,19 @@ class PTokenUser implements ArrayAccess, JsonSerializable
 
     public function offsetExists(mixed $offset): bool
     {
-        return in_array($offset, ['userKey', 'data', 'createAt', 'expireAt'], true);
+        return in_array($offset, ['tokenId', 'userKey', 'data', 'abilities', 'createAt', 'expireAt'], true);
     }
 
     public function offsetGet(mixed $offset): mixed
     {
         return match ($offset) {
-            'userKey'  => $this->userKey,
-            'data'     => $this->data,
-            'createAt' => $this->createAt,
-            'expireAt' => $this->expireAt,
-            default    => null,
+            'tokenId'   => $this->tokenId,
+            'userKey'   => $this->userKey,
+            'data'      => $this->data,
+            'abilities' => $this->abilities,
+            'createAt'  => $this->createAt,
+            'expireAt'  => $this->expireAt,
+            default     => null,
         };
     }
 
@@ -106,10 +158,12 @@ class PTokenUser implements ArrayAccess, JsonSerializable
     public function jsonSerialize(): array
     {
         return [
-            'userKey'  => $this->userKey,
-            'data'     => $this->data,
-            'createAt' => $this->createAt,
-            'expireAt' => $this->expireAt,
+            'tokenId'   => $this->tokenId,
+            'userKey'   => $this->userKey,
+            'data'      => $this->data,
+            'abilities' => $this->abilities,
+            'createAt'  => $this->createAt,
+            'expireAt'  => $this->expireAt,
         ];
     }
 }

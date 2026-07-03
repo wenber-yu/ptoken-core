@@ -1,6 +1,6 @@
 # PToken Core
 
-纯 PHP Token 管理核心库，零框架依赖。提供Token生成、验证、销毁、刷新及多端登录控制等基础能力，内置两种缓存驱动，可作为独立库使用，也可作为 [wenber-yu/ptoken-laravel](https://github.com/wenber-yu/ptoken-laravel) 和 [wenber-yu/ptoken-hyperf](https://github.com/wenber-yu/ptoken-hyperf) 的底层依赖。
+纯 PHP Token 管理核心库，零框架依赖。提供Token生成、验证、销毁、刷新、能力（abilities）控制及多端登录控制等基础能力，内置两种缓存驱动，可作为独立库使用，也可作为 [wenber-yu/ptoken-laravel](https://github.com/wenber-yu/ptoken-laravel) 和 [wenber-yu/ptoken-hyperf](https://github.com/wenber-yu/ptoken-hyperf) 的底层依赖。
 
 ## 环境要求
 
@@ -43,8 +43,8 @@ $ptoken = new PToken([
     ],
 ]);
 
-// ── 登录：生成 Token ──
-$token = $ptoken->generate('user_123', ['role' => 'admin', 'name' => '张三']);
+// ── 登录：生成 Token（可指定能力） ──
+$token = $ptoken->generate('user_123', ['role' => 'admin', 'name' => '张三'], ['read', 'write']);
 echo "Token: {$token}\n";
 
 // ── 认证：获取 Token 数据（自动续期） ──
@@ -52,36 +52,78 @@ $tokenData = $ptoken->get($token);
 if ($tokenData !== null) {
     echo "用户: {$tokenData['userKey']}\n";
     echo "角色: {$tokenData['data']['role']}\n";
+    echo "能力: " . implode(', ', $tokenData['abilities']) . "\n";
     echo "过期时间: " . date('Y-m-d H:i:s', $tokenData['expireAt']) . "\n";
 }
+
+// ── 能力检查 ──
+if ($ptoken->tokenCan($token, 'write')) {
+    // 允许写操作
+}
+$ptoken->authorizeAbilities($token, ['read', 'write']); // 不满足则抛 PTokenForbiddenException
 
 // ── 手动刷新 ──
 $ptoken->refresh($token);
 
 // ── 登出：销毁 Token ──
 $ptoken->destroy($token);
+
+// ── 销毁用户所有 Token ──
+$ptoken->destroyAll('user_123');
+
+// ── 查看用户所有活跃 Token ID ──
+$tokenIds = $ptoken->getTokens('user_123');
 ```
 
 ## API 参考
 
 | 方法 | 签名 | 说明 |
 | --- | --- | --- |
-| `generate` | `generate(string $userKey, mixed $data): string` | 为用户生成新Token，返回Token字符串。`multi_login=false` 时自动销毁该用户旧Token |
+| `generate` | `generate(string $userKey, mixed $data, array $abilities = ['*']): string` | 为用户生成新Token。每个 Token 有唯一 ID（jti），`multi_login=false` 时自动销毁该用户旧 Token |
 | `get` | `get(string $token): ?array` | 校验Token并返回缓存数据。在续期窗口内自动刷新过期时间。过期/无效返回 `null` |
-| `destroy` | `destroy(string $token): bool` | 销毁Token，从缓存中删除 |
+| `destroy` | `destroy(string $token): bool` | 销毁单个 Token |
+| `destroyAll` | `destroyAll(string $userKey): bool` | 销毁某用户的所有 Token |
+| `getTokens` | `getTokens(string $userKey): array` | 获取某用户所有活跃 Token ID |
 | `refresh` | `refresh(string $token): ?string` | 手动刷新Token过期时间，成功返回Token本身，失败返回 `null` |
+| `tokenCan` | `tokenCan(string $token, string $ability): bool` | 检查 Token 是否拥有指定能力 |
+| `tokenCanAny` | `tokenCanAny(string $token, array $abilities): bool` | 检查 Token 是否拥有至少一项能力 |
+| `tokenCanAll` | `tokenCanAll(string $token, array $abilities): bool` | 检查 Token 是否拥有全部能力 |
+| `authorizeAbilities` | `authorizeAbilities(string $token, array $abilities, bool $requireAll = true): void` | 检查能力，不满足则抛出 `PTokenForbiddenException` |
 | `getConfig` | `getConfig(): Config` | 获取当前配置对象 |
 
 ### `get()` 返回值结构
 
 ```php
 [
-    'userKey'  => 'user_123',          // 用户唯一标识
-    'data'     => ['role' => 'admin'], // 登录时关联的自定义数据
-    'createAt' => 1719500000,          // Token 创建时间（Unix 时间戳）
-    'expireAt' => 1719579200,          // Token 过期时间（Unix 时间戳）
+    'tokenId'   => 'abc123...',          // Token 唯一标识
+    'userKey'   => 'user_123',           // 用户唯一标识
+    'data'      => ['role' => 'admin'],  // 登录时关联的自定义数据
+    'abilities' => ['read', 'write'],    // Token 能力/作用域
+    'createAt'  => 1719500000,           // Token 创建时间（Unix 时间戳）
+    'expireAt'  => 1719579200,           // Token 过期时间（Unix 时间戳）
 ]
 ```
+
+## Token 能力（Abilities）
+
+每个 Token 可附带能力列表，用于实现细粒度 API 权限控制：
+
+```php
+// 生成带能力的 Token
+$readOnlyToken = $ptoken->generate('user_1', [], ['read']);
+$fullToken = $ptoken->generate('user_1', [], ['read', 'write', 'delete']);
+$superToken = $ptoken->generate('admin_1', [], ['*']); // * 表示所有能力
+
+// 检查能力
+$ptoken->tokenCan($readOnlyToken, 'read');   // true
+$ptoken->tokenCan($readOnlyToken, 'write');  // false
+
+// 授权检查（不满足抛 PTokenForbiddenException，HTTP 403）
+$ptoken->authorizeAbilities($token, ['write']);
+$ptoken->authorizeAbilities($token, ['read', 'write'], requireAll: false); // 任意一项
+```
+
+在框架中间件层，认证通过后 `PTokenUser` 对象也支持 `tokenCan()` / `tokenCant()` 方法。
 
 ## TokenUser 使用方法
 
@@ -91,18 +133,27 @@ $ptoken->destroy($token);
 use Wenbo\PToken\PTokenUser;
 
 $tokenUser = new PTokenUser(
+    $tokenData['tokenId'],
     $tokenData['userKey'],
     $tokenData['data'],
+    $tokenData['abilities'],
     $tokenData['createAt'],
-    $tokenData['expireAt']
+    $tokenData['expireAt'],
 );
 
 // 属性访问
-echo $tokenUser->getUserKey();   // user_123
-echo $tokenUser->getData()['role']; // admin
+echo $tokenUser->getUserKey();       // user_123
+echo $tokenUser->getTokenId();       // 唯一 Token ID
+echo $tokenUser->getData()['role'];  // admin
+print_r($tokenUser->getAbilities()); // ['read', 'write']
+
+// 能力检查
+$tokenUser->tokenCan('read');    // true
+$tokenUser->tokenCant('delete'); // true
 
 // 数组式访问
 echo $tokenUser['userKey'];
+echo $tokenUser['abilities'][0]; // 'read'
 
 // 状态判断
 if ($tokenUser->isExpired()) { /* ... */ }
@@ -114,11 +165,11 @@ echo json_encode($tokenUser);
 
 ## Token 格式说明
 
-Token 字符串格式：`{encryptedUserKey}{delimiter}{randomStr}`
+Token 字符串格式：`{encryptedUserKey}.{tokenId}`
 
 - `encryptedUserKey`：对 `userKey` 进行 AES-256-CBC 加密后做 URL 安全的 Base64 编码
-- `delimiter`：分隔符，默认 `_`，可通过 `token_delimiter` 配置
-- `randomStr`：16 字节随机字符串，URL 安全 Base64 编码，保证 Token 唯一性
+- `delimiter`：分隔符，默认 `.`，可通过 `token_delimiter` 配置
+- `tokenId`：16 字节随机字符串，URL 安全 Base64 编码，作为 Token 唯一标识（jti）
 
 ## 自动续期机制
 
@@ -130,8 +181,8 @@ Token 字符串格式：`{encryptedUserKey}{delimiter}{randomStr}`
 
 通过 `multi_login` 配置项控制：
 
-- `false`（默认）：同一 `userKey` 只保留最新 Token，新登录自动销毁旧 Token
-- `true`：同一 `userKey` 允许多个 Token 同时有效
+- `false`（默认）：新登录自动销毁该用户所有旧 Token（`destroyAll`）
+- `true`：同一 `userKey` 允许多个 Token 同时有效，每个 Token 有独立 ID
 
 ## 完整配置参考
 
@@ -141,7 +192,7 @@ Token 字符串格式：`{encryptedUserKey}{delimiter}{randomStr}`
 | `cache_pre_key` | `string` | `'ptoken:'` | 缓存键前缀 |
 | `timeout` | `int` | `604800` | Token 有效期（秒），默认 7 天 |
 | `max_refresh` | `int` | `86400` | 最大续期窗口（秒），默认 1 天 |
-| `token_delimiter` | `string` | `'_'` | Token 字符串分隔符 |
+| `token_delimiter` | `string` | `'.'` | Token 字符串分隔符 |
 | `encrypt_key` | `string` | *(32 字节默认值)* | AES-256-CBC 加密密钥，**必须恰好 32 字节** |
 | `multi_login` | `bool` | `false` | 是否允许多端登录 |
 | `user_model` | `?string` | `null` | User Model 类名（FQCN），供框架集成包使用 |

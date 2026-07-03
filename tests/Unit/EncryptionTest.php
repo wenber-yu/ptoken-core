@@ -57,14 +57,14 @@ test('buildToken 与 parseToken 往返', function () {
     $buildMethod = getPrivateMethod(PToken::class, 'buildToken');
     $parseMethod = getPrivateMethod(PToken::class, 'parseToken');
 
-    // 使用不含分隔符 '_' 的值以保证往返正确
-    $token = $buildMethod->invoke($ptoken, 'ABC123encrypted', 'XYZ789random');
+    // 使用不含分隔符 '.' 的值以保证往返正确
+    $token = $buildMethod->invoke($ptoken, 'ABC123encrypted', 'XYZ789tokenId');
 
-    expect($token)->toContain('_');
-    expect($token)->toBe('ABC123encrypted_XYZ789random');
+    expect($token)->toContain('.');
+    expect($token)->toBe('ABC123encrypted.XYZ789tokenId');
 
     $parsed = $parseMethod->invoke($ptoken, $token);
-    expect($parsed)->toBe('ABC123encrypted');
+    expect($parsed)->toBe(['ABC123encrypted', 'XYZ789tokenId']);
 });
 
 test('parseToken 对无效格式返回 null', function () {

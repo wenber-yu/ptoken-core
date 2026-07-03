@@ -7,6 +7,7 @@ namespace Wenbo\PToken;
 use Wenbo\PToken\CacheDrivers\PTokenCacheInterface;
 use Wenbo\PToken\CacheDrivers\PTokenFileDriver;
 use Wenbo\PToken\CacheDrivers\PTokenRedisDriver;
+use Wenbo\PToken\Exceptions\PTokenForbiddenException;
 use RuntimeException;
 
 class PToken
@@ -40,54 +41,64 @@ class PToken
     }
 
     /**
-     * Generate a new token for the given user key and associate it with custom data.
+     * Generate a new token for the given user key.
      *
-     * @param string $userKey Unique identifier for the user (e.g., user ID).
-     * @param mixed  $data    Custom data to associate with the token.
+     * Each token has a unique ID (jti), so multiple tokens for the same user
+     * are independent of each other.
+     *
+     * @param string        $userKey   Unique identifier for the user (e.g., user ID).
+     * @param mixed         $data      Custom data to associate with the token.
+     * @param array<string> $abilities Token abilities (scopes). Use ['*'] for all abilities.
      * @return string The generated token string.
      * @throws RuntimeException on encryption or cache failure.
      */
-    public function generate(string $userKey, mixed $data): string
+    public function generate(string $userKey, mixed $data, array $abilities = ['*']): string
     {
         $encryptedUserKey = $this->encryptUserKey($userKey);
-        $cacheKey = $this->config->cache_pre_key . $encryptedUserKey;
+        $tokenId = $this->generateTokenId();
 
         if (!$this->config->multi_login) {
-            $this->destroyByUserKey($userKey);
+            $this->destroyAllByUserKey($userKey);
         }
 
         $now = time();
-        $randomStr = $this->generateRandomString(16);
-        $token = $this->buildToken($encryptedUserKey, $randomStr);
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
 
         $cacheData = [
-            'userKey'  => $userKey,
-            'data'     => $data,
-            'createAt' => $now,
-            'expireAt' => $now + $this->config->timeout,
+            'tokenId'   => $tokenId,
+            'userKey'   => $userKey,
+            'data'      => $data,
+            'abilities' => $abilities,
+            'createAt'  => $now,
+            'expireAt'  => $now + $this->config->timeout,
         ];
 
         if (!$this->cacheDriver->set($cacheKey, $cacheData, $this->config->timeout)) {
             throw new RuntimeException('Failed to store token data in cache');
         }
 
-        return $token;
+        // Register tokenId in the user's token index
+        $this->addToUserTokenIndex($encryptedUserKey, $tokenId);
+
+        return $this->buildToken($encryptedUserKey, $tokenId);
     }
 
     /**
-     * 获取 Token 关联的用户数据。若在续期窗口内则自动续期。
+     * Get token data. Automatically refreshes if within the refresh window.
      *
-     * @param string $token Token 字符串
-     * @return array{userKey: string, data: mixed, createAt: int, expireAt: int}|null
+     * @param string $token Token string.
+     * @return array{tokenId: string, userKey: string, data: mixed, abilities: array<string>, createAt: int, expireAt: int}|null
      */
     public function get(string $token): ?array
     {
-        $encryptedUserKey = $this->parseToken($token);
-        if ($encryptedUserKey === null) {
+        $parsed = $this->parseToken($token);
+        if ($parsed === null) {
             return null;
         }
 
-        $cacheKey = $this->config->cache_pre_key . $encryptedUserKey;
+        [$encryptedUserKey, $tokenId] = $parsed;
+
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
         $cacheData = $this->cacheDriver->get($cacheKey);
 
         if (!is_array($cacheData) || !isset($cacheData['userKey'], $cacheData['expireAt'])) {
@@ -96,6 +107,7 @@ class PToken
 
         if (time() > $cacheData['expireAt']) {
             $this->cacheDriver->delete($cacheKey);
+            $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
             return null;
         }
 
@@ -110,20 +122,139 @@ class PToken
     }
 
     /**
-     * Destroy a token, removing it from cache.
+     * Check if a token has a specific ability.
+     *
+     * @param string $token   The token string.
+     * @param string $ability The ability to check.
+     * @return bool
+     */
+    public function tokenCan(string $token, string $ability): bool
+    {
+        $tokenData = $this->get($token);
+        if ($tokenData === null) {
+            return false;
+        }
+
+        $abilities = $tokenData['abilities'] ?? [];
+
+        if (in_array('*', $abilities, true)) {
+            return true;
+        }
+
+        return in_array($ability, $abilities, true);
+    }
+
+    /**
+     * Check if a token has at least one of the given abilities.
+     *
+     * @param string          $token     The token string.
+     * @param array<string>   $abilities The abilities to check.
+     * @return bool
+     */
+    public function tokenCanAny(string $token, array $abilities): bool
+    {
+        foreach ($abilities as $ability) {
+            if ($this->tokenCan($token, $ability)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Check if a token has all of the given abilities.
+     *
+     * @param string          $token     The token string.
+     * @param array<string>   $abilities The abilities to check.
+     * @return bool
+     */
+    public function tokenCanAll(string $token, array $abilities): bool
+    {
+        foreach ($abilities as $ability) {
+            if (!$this->tokenCan($token, $ability)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Check token abilities and throw an exception on failure.
+     *
+     * @param string        $token      The token string.
+     * @param array<string> $abilities  Required abilities.
+     * @param bool          $requireAll If true, all abilities are required; if false, at least one.
+     * @throws PTokenForbiddenException
+     */
+    public function authorizeAbilities(string $token, array $abilities, bool $requireAll = true): void
+    {
+        $passed = $requireAll
+            ? $this->tokenCanAll($token, $abilities)
+            : $this->tokenCanAny($token, $abilities);
+
+        if (!$passed) {
+            $condition = $requireAll ? 'all' : 'any';
+            throw new PTokenForbiddenException(
+                "Token lacks required abilities. Required ({$condition}): " . implode(', ', $abilities)
+            );
+        }
+    }
+
+    /**
+     * Destroy a single token.
      *
      * @param string $token The token string.
      * @return bool
      */
     public function destroy(string $token): bool
     {
-        $encryptedUserKey = $this->parseToken($token);
-        if ($encryptedUserKey === null) {
+        $parsed = $this->parseToken($token);
+        if ($parsed === null) {
             return false;
         }
 
-        $cacheKey = $this->config->cache_pre_key . $encryptedUserKey;
+        [$encryptedUserKey, $tokenId] = $parsed;
+
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
+        $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
+
         return $this->cacheDriver->delete($cacheKey);
+    }
+
+    /**
+     * Destroy all tokens belonging to a user.
+     *
+     * @param string $userKey The user identifier.
+     * @return bool
+     */
+    public function destroyAll(string $userKey): bool
+    {
+        $encryptedUserKey = $this->encryptUserKey($userKey);
+        $tokenIds = $this->getUserTokenIds($encryptedUserKey);
+
+        foreach ($tokenIds as $tokenId) {
+            $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
+            $this->cacheDriver->delete($cacheKey);
+        }
+
+        $indexKey = $this->buildUserTokenIndexKey($encryptedUserKey);
+        $this->cacheDriver->delete($indexKey);
+
+        return true;
+    }
+
+    /**
+     * Get all active token IDs for a user.
+     *
+     * @param string $userKey The user identifier.
+     * @return array<string>
+     */
+    public function getTokens(string $userKey): array
+    {
+        $encryptedUserKey = $this->encryptUserKey($userKey);
+        return $this->getUserTokenIds($encryptedUserKey);
     }
 
     /**
@@ -134,12 +265,13 @@ class PToken
      */
     public function refresh(string $token): ?string
     {
-        $encryptedUserKey = $this->parseToken($token);
-        if ($encryptedUserKey === null) {
+        $parsed = $this->parseToken($token);
+        if ($parsed === null) {
             return null;
         }
 
-        $cacheKey = $this->config->cache_pre_key . $encryptedUserKey;
+        [$encryptedUserKey, $tokenId] = $parsed;
+        $cacheKey = $this->buildCacheKey($encryptedUserKey, $tokenId);
         $cacheData = $this->cacheDriver->get($cacheKey);
 
         if (!is_array($cacheData) || !isset($cacheData['userKey'], $cacheData['data'])) {
@@ -153,6 +285,7 @@ class PToken
         $remainingTtl = $cacheData['expireAt'] - $now;
         if ($remainingTtl <= 0) {
             $this->cacheDriver->delete($cacheKey);
+            $this->removeFromUserTokenIndex($encryptedUserKey, $tokenId);
             return null;
         }
 
@@ -171,11 +304,98 @@ class PToken
         return $this->config;
     }
 
-    private function destroyByUserKey(string $userKey): void
+    // ───── Private helpers ─────
+
+    private function destroyAllByUserKey(string $userKey): void
     {
-        $encryptedUserKey = $this->encryptUserKey($userKey);
-        $cacheKey = $this->config->cache_pre_key . $encryptedUserKey;
-        $this->cacheDriver->delete($cacheKey);
+        $this->destroyAll($userKey);
+    }
+
+    private function generateTokenId(): string
+    {
+        return $this->base64UrlEncode(random_bytes(16));
+    }
+
+    private function buildToken(string $encryptedUserKey, string $tokenId): string
+    {
+        return $encryptedUserKey
+            . $this->config->token_delimiter
+            . $tokenId;
+    }
+
+    /**
+     * Parse token into [encryptedUserKey, tokenId] or null.
+     *
+     * @return array{string, string}|null
+     */
+    private function parseToken(string $token): ?array
+    {
+        $delimiter = $this->config->token_delimiter;
+        $parts = explode($delimiter, $token, 3);
+
+        // Support legacy tokens: {encryptedUserKey}_{randomStr}
+        if (count($parts) === 2 && !empty($parts[0]) && !empty($parts[1])) {
+            return [$parts[0], $parts[1]];
+        }
+
+        if (count($parts) === 3 && !empty($parts[0]) && !empty($parts[1])) {
+            return [$parts[0], $parts[1]];
+        }
+
+        return null;
+    }
+
+    private function buildCacheKey(string $encryptedUserKey, string $tokenId): string
+    {
+        return $this->config->cache_pre_key . $encryptedUserKey . $this->config->token_delimiter . $tokenId;
+    }
+
+    private function buildUserTokenIndexKey(string $encryptedUserKey): string
+    {
+        return $this->config->cache_pre_key . $encryptedUserKey . ':tokens';
+    }
+
+    /**
+     * Get all token IDs for a user from the index.
+     *
+     * @return array<string>
+     */
+    private function getUserTokenIds(string $encryptedUserKey): array
+    {
+        $indexKey = $this->buildUserTokenIndexKey($encryptedUserKey);
+        $data = $this->cacheDriver->get($indexKey);
+
+        if (!is_array($data)) {
+            return [];
+        }
+
+        return $data;
+    }
+
+    private function addToUserTokenIndex(string $encryptedUserKey, string $tokenId): void
+    {
+        $indexKey = $this->buildUserTokenIndexKey($encryptedUserKey);
+        $tokenIds = $this->getUserTokenIds($encryptedUserKey);
+
+        if (!in_array($tokenId, $tokenIds, true)) {
+            $tokenIds[] = $tokenId;
+        }
+
+        $this->cacheDriver->set($indexKey, $tokenIds, $this->config->timeout);
+    }
+
+    private function removeFromUserTokenIndex(string $encryptedUserKey, string $tokenId): void
+    {
+        $indexKey = $this->buildUserTokenIndexKey($encryptedUserKey);
+        $tokenIds = $this->getUserTokenIds($encryptedUserKey);
+
+        $filtered = array_values(array_filter($tokenIds, fn (string $id) => $id !== $tokenId));
+
+        if (empty($filtered)) {
+            $this->cacheDriver->delete($indexKey);
+        } else {
+            $this->cacheDriver->set($indexKey, $filtered, $this->config->timeout);
+        }
     }
 
     private function encryptUserKey(string $userKey): string
@@ -217,29 +437,6 @@ class PToken
         );
 
         return $decrypted !== false ? $decrypted : null;
-    }
-
-    private function buildToken(string $encryptedUserKey, string $randomStr): string
-    {
-        return $encryptedUserKey . $this->config->token_delimiter . $randomStr;
-    }
-
-    private function parseToken(string $token): ?string
-    {
-        $delimiter = $this->config->token_delimiter;
-        $parts = explode($delimiter, $token, 2);
-
-        if (count($parts) !== 2 || empty($parts[0])) {
-            return null;
-        }
-
-        return $parts[0];
-    }
-
-    private function generateRandomString(int $length): string
-    {
-        $bytes = random_bytes($length);
-        return $this->base64UrlEncode($bytes);
     }
 
     private function base64UrlEncode(string $data): string

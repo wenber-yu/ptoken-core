@@ -11,7 +11,7 @@ test('默认配置值正确', function () {
     expect($config->cache_pre_key)->toBe('ptoken:');
     expect($config->timeout)->toBe(604800);
     expect($config->max_refresh)->toBe(86400);
-    expect($config->token_delimiter)->toBe('_');
+    expect($config->token_delimiter)->toBe('.');
     expect($config->encrypt_key)->toBe('12345678901234567890123456789012');
     expect($config->multi_login)->toBeFalse();
     expect($config->user_model)->toBeNull();

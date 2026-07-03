@@ -29,9 +29,10 @@ class PTokenConfig
     public int $max_refresh = 86400;
 
     /**
-     * Token 字符串分隔符，格式：{encryptedUserKey}_{randomStr}。
+     * Token 字符串分隔符，格式：{encryptedUserKey}.{tokenId}。
+     * 使用 '.' 因为它不会出现在 Base64URL 编码中。
      */
-    public string $token_delimiter = '_';
+    public string $token_delimiter = '.';
 
     /**
      * AES-256-CBC 加密密钥，必须恰好 32 字节。
@@ -41,7 +42,8 @@ class PTokenConfig
 
     /**
      * 是否允许同一 userKey 多端同时登录。
-     * false = 每个 userKey 仅一个有效 Token（后登录者覆盖前者）。
+     * false = 新登录时自动销毁该 userKey 的所有旧 Token。
+     * true  = 允许多个 Token 同时有效。
      */
     public bool $multi_login = false;
 
